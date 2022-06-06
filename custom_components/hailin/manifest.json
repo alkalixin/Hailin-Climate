@@ -1,0 +1,9 @@
+{
+	"domain": "hailin",
+	"name": "HaiLin Climate",
+	"documentation": "https://github.com/alkalixin/Hailin-Climate",
+	"version": "1.2.0",
+	"requirements": [],
+	"dependencies": [],
+	"codeowners": ["@alkalixin"]
+}

@@ -2,7 +2,6 @@ import asyncio
 import json as JSON
 import logging
 from datetime import timedelta
-from urllib.parse import urlencode
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -20,12 +19,13 @@ from homeassistant.helpers.storage import STORAGE_DIR
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "hailin"
-USER_AGENT = "Hailin/4.2.0 (iPhone; iOS 15.2; Scale/3.00)"
+USER_AGENT = "okhttp/3.8.0"
 CONF_TEMP_STEP = 'temp_step'
 
-AUTH_URL = "http://yunpan.hailin.com:8080/hailin/oauth/token?client_id=hailin_client&client_secret=hailin_client_secret&grant_type=password&oauth_type=%s&password=%s&username=%s"
-LIST_URL = "http://yunpan.hailin.com:8080/hailin/api/page/home"
-CTRL_URL = "http://yunpan.hailin.com:8080/hailin/api/device/operationDevice"
+AUTH_URL = "https://yunpan.hailin.com/user/v1/user/login"
+HOUSE_URL = "https://yunpan.hailin.com/device/v1/device/house"
+LIST_URL = "https://yunpan.hailin.com/device/v1/device/group/findUserGroup?house_id=%s&of_all=0"
+CTRL_URL = "https://yunpan.hailin.com/device/api/device/operationDevice"
 
 DEFAULT_NAME = 'Hailin'
 ATTR_AVAILABLE = 'available'
@@ -191,6 +191,8 @@ class HailinData():
         self.temp_step = temp_step
         self._token_path = hass.config.path(STORAGE_DIR, DOMAIN)
         self.devs = None
+        self._house_id = None
+        self._token = None
         self._token_type = 'bearer'
 
         # 风速相关 - fan_mod(dev_type=14)
@@ -231,13 +233,6 @@ class HailinData():
             HVAC_MODE_FAN_ONLY: 5
         }
 
-        try:
-            with open(self._token_path) as file:
-                self._token = file.read()
-                _LOGGER.debug("Load token: %s", self._token_path)
-        except Exception:
-            self._token = None
-
     async def async_update(self, time):
         """Update online data and update ha state."""
         old_devs = self.devs
@@ -256,48 +251,49 @@ class HailinData():
     async def update_data(self):
         """Update online data."""
         try:
-            json = await self.request(LIST_URL, {})
+            json = await self.get_list()
             if ('error' in json) and (json['error'] != '0'):
-                _LOGGER.debug("Reset token: error=%s", json['error'])
-                self._token = None
-                json = await self.request(LIST_URL, {})
+                json = await self.get_list()
             devs = []
-            list = json['data']['devices']
-            for dev in list:
-                if not isinstance(dev, dict):
-                    raise TypeError(f"{json}")
-                device_json_object = JSON.loads(dev['device_json_object'])
+            for group in json['data']:
+                for dev in group['devicesGroupItems']:
+                    if not isinstance(dev, dict):
+                        raise TypeError(f"{json}")
+                    device_json_object = JSON.loads(dev['device_json_object'])
 
-                support_fan_mode = device_json_object.get('dirty_fan_mod', False)  # 支持送风
-                support_heat_mode = device_json_object.get('dirty_heat_mode', False)  # 支持加热
-                support_cool_mode = device_json_object.get('dirty_temp_cool', False)  # 支持制冷
+                    support_fan_mode = device_json_object.get('dirty_fan_mod', False)  # 支持送风
+                    support_heat_mode = device_json_object.get('dirty_heat_mode', False)  # 支持加热
+                    support_cool_mode = device_json_object.get('dirty_temp_cool', False)  # 支持制冷
 
-                status_onoff = int(device_json_object.get('status_onoff', 0))  # 开机：1   关机：0
-                status = int(device_json_object.get('status', 2))
-                mode = 'cool' if (status == 1 or status == 5) else 'heat'
-                hvac_mode = HVAC_MODE_OFF
-                if status_onoff == 1:
-                    hvac_mode = self._status2hvac_mode[status]
+                    status_onoff = int(device_json_object.get('status_onoff', 0))  # 开机：1   关机：0
+                    status = int(device_json_object.get('status', 2))
+                    mode = 'cool' if (status == 1 or status == 5) else 'heat'
+                    hvac_mode = HVAC_MODE_OFF
+                    if status_onoff == 1:
+                        hvac_mode = self._status2hvac_mode[status]
 
-                dev_entity = {
-                    "SUPPORT_FAN_MODE": support_fan_mode,
-                    "SUPPORT_HEAT_MODE": support_heat_mode,
-                    "SUPPORT_COOL_MODE": support_cool_mode,
-                    'mode': mode,  # 用于组装发起请求时的字段
-                    ATTR_HVAC_MODE: hvac_mode,  # 当前模式： 加热、制冷、吹风、关机
-                    ATTR_CURRENT_TEMPERATURE: float(device_json_object.get('dis_temp')[1:]),  # 当前温度
-                    ATTR_TEMPERATURE: float(device_json_object.get('temp_' + mode)[1:]),  # 设定温度
-                    ATTR_AVAILABLE: dev.get('is_enabled'),
-                    ATTR_MAX_TEMP: float(device_json_object.get('temp_' + mode + '_default_max', 'c30.0')[1:]),  # 最高温度
-                    ATTR_MIN_TEMP: float(device_json_object.get('temp_' + mode + '_default_min', 'c10.0')[1:]),  # 最低温度
-                    ATTR_NAME: dev.get('dis_dev_name'),  # 设备名称
-                    ATTR_ID: dev.get('mac')  # 用mac地址当做id
-                }
+                    dev_entity = {
+                        "SUPPORT_FAN_MODE": support_fan_mode,
+                        "SUPPORT_HEAT_MODE": support_heat_mode,
+                        "SUPPORT_COOL_MODE": support_cool_mode,
+                        'mode': mode,  # 用于组装发起请求时的字段
+                        ATTR_HVAC_MODE: hvac_mode,  # 当前模式： 加热、制冷、吹风、关机
+                        ATTR_CURRENT_TEMPERATURE: float(device_json_object.get('dis_temp')[1:]),  # 当前温度
+                        ATTR_TEMPERATURE: float(device_json_object.get('temp_' + mode)[1:]),  # 设定温度
+                        ATTR_AVAILABLE: dev.get('is_enabled'),
+                        ATTR_MAX_TEMP: float(device_json_object.get('temp_' + mode + '_default_max', 'c30.0')[1:]),
+                        # 最高温度
+                        ATTR_MIN_TEMP: float(device_json_object.get('temp_' + mode + '_default_min', 'c10.0')[1:]),
+                        # 最低温度
+                        ATTR_NAME: dev.get('dis_dev_name'),  # 设备名称
+                        ATTR_ID: dev.get('mac')  # 用mac地址当做id
+                    }
 
-                if support_fan_mode:
-                    dev_entity[ATTR_FAN_MODE] = self._num2fan_modes[int(device_json_object.get('fan_mod', 0))]  # 风扇速度
+                    if support_fan_mode:
+                        dev_entity[ATTR_FAN_MODE] = self._num2fan_modes[
+                            int(device_json_object.get('fan_mod', 0))]  # 风扇速度
 
-                devs.append(dev_entity)
+                    devs.append(dev_entity)
             self.devs = devs
             _LOGGER.debug("List device: devs=%s", self.devs)
         except Exception:
@@ -335,10 +331,9 @@ class HailinData():
                 }).replace(" ", "")
             else:
                 return False
-            data = urlencode(data)
-            json = await self.request(CTRL_URL, data)
+            json = await self.request(CTRL_URL, JSON.dumps(data))
             _LOGGER.debug("Control device: prop=%s, data=%s, json=%s", prop, JSON.dumps(data), json)
-            if json['code'] == 200:
+            if json == {}:
                 self.devs[index][prop] = value
                 return True
             return False
@@ -354,7 +349,7 @@ class HailinData():
             await self.login()
 
         headers = {'User-Agent': USER_AGENT, 'Authorization': "%s %s" % (self._token_type, self._token),
-                   'Content-Type': 'application/x-www-form-urlencoded'}
+                   'Content-Type': 'application/json'}
         _LOGGER.debug("Hailin URL: %s; data: %s", url, JSON.dumps(data))
         async with await session.post(url, headers=headers, data=data) as r:
             _LOGGER.debug("Hailin response: %s", await r.text())
@@ -367,9 +362,15 @@ class HailinData():
         session = self._hass.helpers.aiohttp_client.async_get_clientsession()
 
         headers = {'User-Agent': USER_AGENT}
-        auth_url = AUTH_URL % (self._type, self._password, self._username)
         _LOGGER.debug('start login')
-        async with await session.get(auth_url, headers=headers) as r:
+        data = {
+            "clientId": 1,
+            "client_secret": "d0404a5b1b5d6b6a6db049d441804188",
+            "username": self._username,
+            "password": self._password,
+            "oauth_type": self._type,
+        }
+        async with await session.post(AUTH_URL, headers=headers, data=JSON.dumps(data)) as r:
             json = await r.json()
         if 'error' in json:
             _LOGGER.error('login fail: %s', json['error'])
@@ -378,5 +379,27 @@ class HailinData():
         _LOGGER.debug("Get token: %s", json['access_token'])
         self._token = json['access_token']
         self._token_type = json['token_type']
-        with open(self._token_path, 'w') as file:
-            file.write(self._token)
+
+    async def get_house_id(self):
+        session = self._hass.helpers.aiohttp_client.async_get_clientsession()
+        headers = {'User-Agent': USER_AGENT, 'Authorization': "%s %s" % (self._token_type, self._token)}
+        async with await session.get(HOUSE_URL, headers=headers) as r:
+            json = await r.json()
+        if 'error' in json:
+            _LOGGER.error('get house_id fail: %s', json['error'])
+            return None
+        self._house_id = json['id']
+
+    async def get_list(self):
+        """get all the devices."""
+        if self._token is None:
+            await self.login()
+        if self._house_id is None:
+            await self.get_house_id()
+        list_url = LIST_URL % self._house_id
+        session = self._hass.helpers.aiohttp_client.async_get_clientsession()
+        headers = {'User-Agent': USER_AGENT, 'Authorization': "%s %s" % (self._token_type, self._token),
+                   'Content-Type': 'application/json'}
+        async with await session.get(list_url, headers=headers) as r:
+            res = await r.json()
+            return res

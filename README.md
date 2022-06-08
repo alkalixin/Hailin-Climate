@@ -39,7 +39,13 @@ HA面板会根据设备型号以及当前所处模式变化。
 ![绿动](https://s4.ax1x.com/2022/01/04/TLJfnf.jpg)
 ![绿动](https://s4.ax1x.com/2022/01/04/TLJg1I.jpg)
 
-## 4. 参考
+
+## 4. 注意
+请确保APP的分组管理中至少存在一个分组并且所有设备都在分组中。否则会出现接口无法找到该设备的情况
+
+[![分组示例](https://s1.ax1x.com/2022/06/08/XrVT3D.jpg)](https://imgtu.com/i/XrVT3D)
+
+## 5. 参考
 
 - [https://github.com/Yonsm/ZhiSaswell](https://github.com/Yonsm/ZhiSaswell)
 - [https://bbs.hassbian.com/thread-3387-1-1.html](https://bbs.hassbian.com/thread-3387-1-1.html)

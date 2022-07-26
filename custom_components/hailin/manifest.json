@@ -2,7 +2,7 @@
 	"domain": "hailin",
 	"name": "HaiLin Climate",
 	"documentation": "https://github.com/alkalixin/Hailin-Climate",
-	"version": "1.4.0",
+	"version": "1.4.1",
 	"requirements": [],
 	"dependencies": [],
 	"codeowners": ["@alkalixin"]

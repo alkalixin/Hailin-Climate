@@ -46,7 +46,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    hailin = HailinData(hass, config[CONF_TYPE], config[CONF_USERNAME], config[CONF_PASSWORD], config[CONF_TEMP_STEP])
+    hailin = HailinData(hass, config[CONF_TYPE], config[CONF_USERNAME], config[CONF_PASSWORD], config[CONF_TEMP_STEP], config.get(CONF_SUPPORT_FAN), config.get(CONF_SUPPORT_COOL), config.get(CONF_SUPPORT_HEAT))
     await hailin.update_data()
     if not hailin.devs:
         _LOGGER.error("No sensors added.")

@@ -21,6 +21,9 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "hailin"
 USER_AGENT = "okhttp/3.8.0"
 CONF_TEMP_STEP = 'temp_step'
+CONF_SUPPORT_FAN = 'support_fan'
+CONF_SUPPORT_COOL = 'support_cool'
+CONF_SUPPORT_HEAT = 'support_heat'
 
 AUTH_URL = "https://yunpan.hailin.com/user/v1/user/login"
 HOUSE_URL = "https://yunpan.hailin.com/device/v1/device/house"
@@ -35,7 +38,10 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_USERNAME): cv.string,
     vol.Required(CONF_PASSWORD): cv.string,
     vol.Optional(CONF_SCAN_INTERVAL, default=timedelta(seconds=300)): vol.All(cv.time_period, cv.positive_timedelta),
-    vol.Optional(CONF_TEMP_STEP, default=0.5): cv.positive_float
+    vol.Optional(CONF_TEMP_STEP, default=0.5): cv.positive_float,
+    vol.Optional(CONF_SUPPORT_FAN): cv.boolean,
+    vol.Optional(CONF_SUPPORT_COOL): cv.boolean,
+    vol.Optional(CONF_SUPPORT_HEAT): cv.boolean
 })
 
 
@@ -182,13 +188,16 @@ class HailinClimate(ClimateEntity):
 class HailinData():
     """Class for handling the data retrieval."""
 
-    def __init__(self, hass, type, username, password, temp_step):
+    def __init__(self, hass, type, username, password, temp_step, support_fan, support_cool, support_heat):
         """Initialize the data object."""
         self._hass = hass
         self._type = type
         self._username = username.replace('@', '%40')
         self._password = password
         self.temp_step = temp_step
+        self.support_fan = support_fan
+        self.support_cool = support_cool
+        self.support_heat = support_heat
         self._token_path = hass.config.path(STORAGE_DIR, DOMAIN)
         self.devs = None
         self._house_id = None
@@ -246,7 +255,12 @@ class HailinData():
                 tasks.append(device.async_update_ha_state())
 
         if tasks:
-            await asyncio.wait(tasks, loop=self._hass.loop)
+            # python3.10以上不再支持loop参数。3.10以下需要loop参数
+            try:
+                await asyncio.wait(tasks, loop=self._hass.loop)
+            except Exception:
+                await asyncio.wait(tasks)
+
 
     async def update_data(self):
         """Update online data."""
@@ -261,9 +275,12 @@ class HailinData():
                         raise TypeError(f"{json}")
                     device_json_object = JSON.loads(dev['device_json_object'])
 
-                    support_fan_mode = device_json_object.get('dirty_fan_mod', False)  # 支持送风
-                    support_heat_mode = device_json_object.get('dirty_heat_mode', False)  # 支持加热
-                    support_cool_mode = device_json_object.get('dirty_temp_cool', False)  # 支持制冷
+                    support_fan_mode = device_json_object.get('dirty_fan_mod', False) if (
+                                self.support_fan is None) else self.support_fan  # 支持送风
+                    support_heat_mode = device_json_object.get('dirty_heat_mode', False) if (
+                                self.support_heat is None) else self.support_heat  # 支持加热
+                    support_cool_mode = device_json_object.get('dirty_temp_cool', False) if (
+                                self.support_cool is None) else self.support_cool  # 支持制冷
 
                     status_onoff = int(device_json_object.get('status_onoff', 0))  # 开机：1   关机：0
                     status = int(device_json_object.get('status', 2))

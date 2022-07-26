@@ -5,8 +5,11 @@
 [Hailin](https://www.hailin.com/html/PC/index.html) 地暖温控面板插件，我家里用的是 [**㻏动**](https://www.hailin.com/html/PC/proDetail.html?id=106) 这一款。
 
 当前已知支持的设备：
-* [㻏动](https://www.hailin.com/html/PC/proDetail.html?id=106) (devType 8)
-* [绿动](https://www.hailin.com/html/PC/proDetail.html?id=121) (devType 14)
+* [㻏动](https://www.hailin.com/html/PC/proDetail.html?id=106)
+  * devType 8
+  * devType 9 （需要配置support参数，见下文）
+* [绿动](https://www.hailin.com/html/PC/proDetail.html?id=121)
+  * devType 14
 
 相关使用方式都是基于以上两款设备。其他型号就不太确定是否能用，欢迎抓包后提issue给我
 
@@ -23,12 +26,18 @@ climate:
     type: mobile
     username: ********
     password: ********
-    #scan_interval: 300
-    #temp_step: 1
+    # scan_interval: 300
+    # temp_step: 1
+    # support_fan: true
+    # support_cool: false
+    # support_heat: true
 ```
 
 `scan_interval` 可以自行调整状态拉取时间间隔秒数，默认五分钟同步一次温度和状态，是不是慢了点儿，不过地暖本来就很慢：）
+
 `temp_step` 每次点击加减温度时的温度跨度，默认值为0.5，可以根据实际情况修改。例如目前我的㻏动面板在app中以及HA中已经无法以0.5为单位加减温度了
+
+`support_XXX` 这三个选填参数可以`全局`指定所有面板支持的模式。当你的设备不在已知支持设备列表，并且默认状态下没有正确读出所有模式时可以使用这三个参数手动指定模式。
 
 ## 3. 使用方式
 HA面板会根据设备型号以及当前所处模式变化。

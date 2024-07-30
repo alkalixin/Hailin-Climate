@@ -59,6 +59,8 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     # 根据配置中的实际定时更新状态
     async_track_time_interval(hass, hailin.async_update, config.get(CONF_SCAN_INTERVAL))
 
+    # 每隔3天定时重新登录
+    async_track_time_interval(hass, hailin.login, timedelta(days=3))
 
 class HailinClimate(ClimateEntity):
     """Representation of a Hailin climate device."""
@@ -266,7 +268,10 @@ class HailinData():
         """Update online data."""
         try:
             json = await self.get_list()
-            if ('error' in json) and (json['error'] != '0'):
+            if ('error' in json) and (json['code'] == 16):
+                await self.login()
+                return
+            if ('error' in json) and (json['code'] != '0'):
                 json = await self.get_list()
             devs = []
             for group in json['data']:
@@ -313,7 +318,10 @@ class HailinData():
                     devs.append(dev_entity)
             self.devs = devs
             _LOGGER.debug("List device: devs=%s", self.devs)
+        except KeyError:
+            _LOGGER.error('Key Error happens: api response=%s', json)
         except Exception:
+            _LOGGER.error('Exception happens: api response=%s', json)
             import traceback
             _LOGGER.error(traceback.format_exc())
 
@@ -354,6 +362,8 @@ class HailinData():
                 self.devs[index][prop] = value
                 return True
             return False
+        except KeyError:
+            _LOGGER.error('Key Error happens: api response=%s', json)
         except Exception:
             import traceback
             _LOGGER.error('Exception: %s', traceback.format_exc())
@@ -368,11 +378,19 @@ class HailinData():
         headers = {'User-Agent': USER_AGENT, 'Authorization': "%s %s" % (self._token_type, self._token),
                    'Content-Type': 'application/json'}
         _LOGGER.debug("Hailin URL: %s; data: %s", url, JSON.dumps(data))
-        async with await session.post(url, headers=headers, data=data) as r:
-            _LOGGER.debug("Hailin response: %s", await r.text())
-            res = await r.json()
-            _LOGGER.debug('Hailin request resonse: %s', res)
-            return res
+
+        try:
+            async with await session.post(url, headers=headers, data=data) as r:
+                _LOGGER.debug("Hailin response: %s", await r.text())
+                res = await r.json()
+                _LOGGER.debug('Hailin request resonse: %s', r)
+                return res
+        except KeyError:
+            _LOGGER.error('Key Error happens: api response=%s', r)
+        except Exception:
+            import traceback
+            _LOGGER.error('Exception: %s', traceback.format_exc())
+            return False
 
     async def login(self):
         """Request from server."""
@@ -400,12 +418,19 @@ class HailinData():
     async def get_house_id(self):
         session = self._hass.helpers.aiohttp_client.async_get_clientsession()
         headers = {'User-Agent': USER_AGENT, 'Authorization': "%s %s" % (self._token_type, self._token)}
-        async with await session.get(HOUSE_URL, headers=headers) as r:
-            json = await r.json()
-        if 'error' in json:
-            _LOGGER.error('get house_id fail: %s', json['error'])
-            return None
-        self._house_id = json['id']
+        try:
+            async with await session.get(HOUSE_URL, headers=headers) as r:
+                json = await r.json()
+            if 'error' in json:
+                _LOGGER.error('get house_id fail: %s', json['error'])
+                return None
+            self._house_id = json['id']
+        except KeyError:
+            _LOGGER.error('Key Error happens: api response=%s', r)
+        except Exception:
+            import traceback
+            _LOGGER.error('Exception: %s', traceback.format_exc())
+            return False
 
     async def get_list(self):
         """get all the devices."""
@@ -417,6 +442,13 @@ class HailinData():
         session = self._hass.helpers.aiohttp_client.async_get_clientsession()
         headers = {'User-Agent': USER_AGENT, 'Authorization': "%s %s" % (self._token_type, self._token),
                    'Content-Type': 'application/json'}
-        async with await session.get(list_url, headers=headers) as r:
-            res = await r.json()
-            return res
+        try:
+            async with await session.get(list_url, headers=headers) as r:
+                res = await r.json()
+                return res
+        except KeyError:
+            _LOGGER.error('Key Error happens: api response=%s', r)
+        except Exception:
+            import traceback
+            _LOGGER.error('Exception: %s, api returns: %s', traceback.format_exc(), r)
+            return False

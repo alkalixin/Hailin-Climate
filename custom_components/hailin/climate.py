@@ -12,20 +12,13 @@ from homeassistant.components.climate.const import (
     ATTR_HVAC_MODE,
     ATTR_MAX_TEMP,
     ATTR_MIN_TEMP,
-    CURRENT_HVAC_COOL,
-    CURRENT_HVAC_FAN,
-    CURRENT_HVAC_HEAT,
-    CURRENT_HVAC_OFF,
     FAN_AUTO,
     FAN_HIGH,
     FAN_LOW,
     FAN_MEDIUM,
-    HVAC_MODE_COOL,
-    HVAC_MODE_FAN_ONLY,
-    HVAC_MODE_HEAT,
-    HVAC_MODE_OFF,
-    SUPPORT_FAN_MODE,
-    SUPPORT_TARGET_TEMPERATURE,
+    ClimateEntityFeature,
+    HVACAction,
+    HVACMode,
 )
 from homeassistant.const import (
     ATTR_ID,
@@ -108,12 +101,12 @@ class HailinClimate(ClimateEntity):
         self._index = index
         self._hailin = hailin
         self.modeEnum = {
-            HVAC_MODE_COOL: CURRENT_HVAC_COOL,
-            HVAC_MODE_HEAT: CURRENT_HVAC_HEAT,
-            HVAC_MODE_FAN_ONLY: CURRENT_HVAC_FAN,
-            HVAC_MODE_OFF: CURRENT_HVAC_OFF,
+            HVACMode.COOL: HVACAction.COOLING,
+            HVACMode.HEAT: HVACAction.HEATING,
+            HVACMode.FAN_ONLY: HVACAction.FAN,
+            HVACMode.OFF: HVACAction.OFF,
         }
-        self.modes = [HVAC_MODE_OFF]
+        self.modes = [HVACMode.OFF]
 
     @property
     def unique_id(self):
@@ -135,13 +128,13 @@ class HailinClimate(ClimateEntity):
     def supported_features(self):
         """Return the list of supported features."""
         supports = 0
-        if self.get_value(ATTR_HVAC_MODE) != HVAC_MODE_FAN_ONLY:
-            supports = supports | SUPPORT_TARGET_TEMPERATURE
+        if self.get_value(ATTR_HVAC_MODE) != HVACMode.FAN_ONLY:
+            supports = supports | ClimateEntityFeature.TARGET_TEMPERATURE
         if self.get_value("SUPPORT_FAN_MODE") and (
-            self.get_value(ATTR_HVAC_MODE) == HVAC_MODE_FAN_ONLY
-            or self.get_value(ATTR_HVAC_MODE) == HVAC_MODE_COOL
+            self.get_value(ATTR_HVAC_MODE) == HVACMode.FAN_ONLY
+            or self.get_value(ATTR_HVAC_MODE) == HVACMode.COOL
         ):
-            supports = supports | SUPPORT_FAN_MODE
+            supports = supports | ClimateEntityFeature.FAN_MODE
         return supports
 
     @property
@@ -178,11 +171,11 @@ class HailinClimate(ClimateEntity):
     def hvac_modes(self):
         """Return the list of available operation modes."""
         if self.get_value("SUPPORT_FAN_MODE"):
-            self.modes.append(HVAC_MODE_FAN_ONLY)
+            self.modes.append(HVACMode.FAN_ONLY)
         if self.get_value("SUPPORT_HEAT_MODE"):
-            self.modes.append(HVAC_MODE_HEAT)
+            self.modes.append(HVACMode.HEAT)
         if self.get_value("SUPPORT_COOL_MODE"):
-            self.modes.append(HVAC_MODE_COOL)
+            self.modes.append(HVACMode.COOL)
         return list(set(self.modes))  # 去重
 
     @property
@@ -281,17 +274,17 @@ class HailinData:
         # 1: 制冷(dev_type=14)
         # 5: 通风(dev_type=14)
         self._status2hvac_mode = {
-            2: HVAC_MODE_HEAT,
-            4: HVAC_MODE_HEAT,
-            7: HVAC_MODE_HEAT,
-            1: HVAC_MODE_COOL,
-            5: HVAC_MODE_FAN_ONLY,
+            2: HVACMode.HEAT,
+            4: HVACMode.HEAT,
+            7: HVACMode.HEAT,
+            1: HVACMode.COOL,
+            5: HVACMode.FAN_ONLY,
         }
 
         self._hvac_mode2status = {
-            HVAC_MODE_HEAT: 7,
-            HVAC_MODE_COOL: 1,
-            HVAC_MODE_FAN_ONLY: 5,
+            HVACMode.HEAT: 7,
+            HVACMode.COOL: 1,
+            HVACMode.FAN_ONLY: 5,
         }
 
     async def async_update(self, time):
@@ -350,7 +343,7 @@ class HailinData:
                     )  # 开机：1   关机：0
                     status = int(device_json_object.get("status", 2))
                     mode = "cool" if support_cool_mode else "heat"
-                    hvac_mode = HVAC_MODE_OFF
+                    hvac_mode = HVACMode.OFF
                     if status_onoff == 1:
                         hvac_mode = self._status2hvac_mode[status]
 
@@ -405,7 +398,7 @@ class HailinData:
         try:
             # 切换模式：heat cool fan_only off
             if prop == ATTR_HVAC_MODE:
-                if value == HVAC_MODE_OFF:
+                if value == HVACMode.OFF:
                     data["operation"] = JSON.dumps({"status_onoff": "0"}).replace(
                         " ", ""
                     )

@@ -2,7 +2,7 @@ import asyncio
 from datetime import timedelta
 import json as JSON
 import logging
-
+from homeassistant.helpers import aiohttp_client
 import voluptuous as vol
 
 from homeassistant.components.climate import PLATFORM_SCHEMA, ClimateEntity
@@ -42,10 +42,7 @@ CONF_SUPPORT_FAN = "support_fan"
 CONF_SUPPORT_COOL = "support_cool"
 CONF_SUPPORT_HEAT = "support_heat"
 
-AUTH_URL = "https://yunpan.hailin.com/user/v1/user/login"
-HOUSE_URL = "https://yunpan.hailin.com/device/v1/device/house"
-LIST_URL = "https://yunpan.hailin.com/device/v1/device/group/findUserGroup?house_id=%s&of_all=0"
-CTRL_URL = "https://yunpan.hailin.com/device/api/device/operationDevice"
+from .const import AUTH_URL, HOUSE_URL, LIST_URL, CTRL_URL
 
 DEFAULT_NAME = "Hailin"
 ATTR_AVAILABLE = "available"
@@ -292,19 +289,13 @@ class HailinData:
         old_devs = self.devs
         await self.update_data()
 
-        tasks = []
-        index = 0
-        for device in self.devices:
-            if not old_devs or not self.devs or old_devs[index] != self.devs[index]:
-                _LOGGER.debug("%s: => %s", device.name, device.state)
-                tasks.append(device.async_update_ha_state())
+        tasks = [
+            device.async_update_ha_state()
+            for index, device in enumerate(self.devices)
+            if not old_devs or not self.devs or old_devs[index] != self.devs[index]
+        ]
 
-        if tasks:
-            # python3.10以上不再支持loop参数。3.10以下需要loop参数
-            try:
-                await asyncio.wait(tasks, loop=self._hass.loop)
-            except Exception:
-                await asyncio.wait(tasks)
+        await asyncio.gather(*tasks)
 
     async def update_data(self):
         """Update online data."""
@@ -440,13 +431,13 @@ class HailinData:
 
     async def request(self, url, data):
         """Request from server."""
-        session = self._hass.helpers.aiohttp_client.async_get_clientsession()
+        session = aiohttp_client.async_get_clientsession(self._hass)
         if self._token is None:
             await self.login()
 
         headers = {
             "User-Agent": USER_AGENT,
-            "Authorization": "%s %s" % (self._token_type, self._token),
+            "Authorization": f"{self._token_type} {self._token}",
             "Content-Type": "application/json",
         }
         _LOGGER.debug("Hailin URL: %s; data: %s", url, JSON.dumps(data))
@@ -467,7 +458,7 @@ class HailinData:
 
     async def login(self):
         """Request from server."""
-        session = self._hass.helpers.aiohttp_client.async_get_clientsession()
+        session = aiohttp_client.async_get_clientsession(self._hass)
 
         headers = {"User-Agent": USER_AGENT}
         _LOGGER.debug("start login")
@@ -491,10 +482,10 @@ class HailinData:
         self._token_type = json["token_type"]
 
     async def get_house_id(self):
-        session = self._hass.helpers.aiohttp_client.async_get_clientsession()
+        session = aiohttp_client.async_get_clientsession(self._hass)
         headers = {
             "User-Agent": USER_AGENT,
-            "Authorization": "%s %s" % (self._token_type, self._token),
+            "Authorization": f"{self._token_type} {self._token}",
         }
         try:
             async with await session.get(HOUSE_URL, headers=headers) as r:
@@ -518,7 +509,7 @@ class HailinData:
         if self._house_id is None:
             await self.get_house_id()
         list_url = LIST_URL % self._house_id
-        session = self._hass.helpers.aiohttp_client.async_get_clientsession()
+        session = aiohttp_client.async_get_clientsession(self._hass)
         headers = {
             "User-Agent": USER_AGENT,
             "Authorization": "%s %s" % (self._token_type, self._token),

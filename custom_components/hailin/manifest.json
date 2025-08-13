@@ -1,9 +1,12 @@
 {
-	"domain": "hailin",
-	"name": "HaiLin Climate",
-	"documentation": "https://github.com/alkalixin/Hailin-Climate",
-	"version": "1.4.4",
-	"requirements": [],
-	"dependencies": [],
-	"codeowners": ["@alkalixin"]
+  "domain": "hailin",
+  "name": "HaiLin Climate",
+  "version": "2.0.0",
+  "documentation": "https://github.com/alkalixin/Hailin-Climate",
+  "issue_tracker": "https://github.com/alkalixin/Hailin-Climate/issues",
+  "requirements": [],
+  "codeowners": ["@alkalixin"],
+  "config_flow": true,
+  "integration_type": "hub",
+  "iot_class": "cloud_polling"
 }

@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HaiLin Climate Configuration",
+        "description": "Enter your HaiLin account information",
+        "data": {
+          "type": "Login Type",
+          "username": "Username",
+          "password": "Password",
+          "temp_step": "Temperature Step",
+          "support_fan": "Support Fan Mode",
+          "support_cool": "Support Cool Mode",
+          "support_heat": "Support Heat Mode",
+          "update_interval": "Data Update Interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  }
+}

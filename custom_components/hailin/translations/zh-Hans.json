@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "海林配置",
+        "description": "请输入您的海林账户信息",
+        "data": {
+          "type": "登录类型",
+          "username": "用户名",
+          "password": "密码",
+          "temp_step": "温度步长",
+          "support_fan": "支持风扇模式",
+          "support_cool": "支持制冷模式",
+          "support_heat": "支持制热模式",
+          "update_interval": "数据更新间隔（秒）"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "认证失败",
+      "unknown": "未知错误"
+    },
+    "abort": {
+      "already_configured": "设备已配置"
+    }
+  }
+}

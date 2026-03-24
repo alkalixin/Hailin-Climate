@@ -1,7 +1,7 @@
 {
   "domain": "hailin",
   "name": "HaiLin Climate",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "documentation": "https://github.com/alkalixin/Hailin-Climate",
   "issue_tracker": "https://github.com/alkalixin/Hailin-Climate/issues",
   "requirements": [],

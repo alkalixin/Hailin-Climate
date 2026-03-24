@@ -3,39 +3,27 @@
 import json as JSON
 import logging
 
-from homeassistant.components.climate import (
-    ClimateEntity,
-    ClimateEntityFeature,
-)
+from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature
 from homeassistant.components.climate.const import (
-    ATTR_HVAC_MODE,
-    ATTR_FAN_MODE,
     ATTR_CURRENT_TEMPERATURE,
+    ATTR_FAN_MODE,
+    ATTR_HVAC_MODE,
+    ATTR_MAX_TEMP,
+    ATTR_MIN_TEMP,
     FAN_AUTO,
     FAN_HIGH,
     FAN_LOW,
     FAN_MEDIUM,
     HVACAction,
     HVACMode,
-    ATTR_MAX_TEMP,
-    ATTR_MIN_TEMP,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    ATTR_ID,
-    ATTR_NAME,
-    ATTR_TEMPERATURE,
-    UnitOfTemperature,
-)
+from homeassistant.const import ATTR_ID, ATTR_NAME, ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import (
-    CTRL_URL,
-    DOMAIN,
-    LIST_URL,
-)
 from .auth import HaiLinAuth
+from .const import CTRL_URL, DOMAIN, LIST_URL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,24 +37,21 @@ async def async_setup_entry(
 ) -> None:
     """Set up the HaiLin Climate platform."""
     _LOGGER.info("Setting up HaiLin Climate platform")
-    
-    # 从hass.data获取已初始化的数据管理器
+
     hailin = hass.data[DOMAIN][config_entry.entry_id]
-    
+
     if not hailin.devs:
         _LOGGER.error("No HaiLin devices available")
         return
 
-    # 创建气候实体
     hailin.devices = [HaiLinClimate(hailin, index) for index in range(len(hailin.devs))]
     _LOGGER.debug("Created %d HaiLin climate entities", len(hailin.devices))
 
-    # 显示每个设备的MAC地址和entity_id信息
-    for i, device in enumerate(hailin.devices):
-        mac = hailin.devs[i].get("mac", hailin.devs[i].get("id", "Unknown"))
+    for index, device in enumerate(hailin.devices):
+        mac = hailin.devs[index].get("mac", hailin.devs[index].get("id", "Unknown"))
         _LOGGER.info(
             "Device %d: %s (MAC: %s, unique_id: %s)",
-            i,
+            index,
             device.name,
             mac,
             device.unique_id,
@@ -84,42 +69,69 @@ class HaiLinClimate(ClimateEntity):
         """Initialize the climate device."""
         self._index = index
         self._hailin = hailin
-        self.modeEnum = {
+        initial_device = hailin.devs[index] if index < len(hailin.devs) else {}
+        self._device_key = initial_device.get("mac", initial_device.get("id", index))
+        self._device_name = initial_device.get("name", f"HaiLin {index}")
+        self._last_known_device = dict(initial_device)
+        self.mode_enum = {
             HVACMode.COOL: HVACAction.COOLING,
             HVACMode.HEAT: HVACAction.HEATING,
             HVACMode.FAN_ONLY: HVACAction.FAN,
             HVACMode.OFF: HVACAction.OFF,
         }
 
+    def _resolve_device(self):
+        """Resolve the latest device payload using a stable device key."""
+        for index, device in enumerate(self._hailin.devs):
+            if device.get("mac", device.get("id")) == self._device_key:
+                self._index = index
+                self._last_known_device = device
+                return device
+
+        return None
+
+    def _get_device(self, include_last_known=True):
+        """Return the current device payload or the last known payload."""
+        device = self._resolve_device()
+        if device is not None:
+            return device
+
+        if include_last_known and self._last_known_device:
+            return self._last_known_device
+
+        return None
+
     @property
     def unique_id(self):
         """Return the unique ID of the device."""
-        mac = self._hailin.devs[self._index].get(
-            "mac", self._hailin.devs[self._index].get("id", self._index)
-        )
-        return mac
+        return self._device_key
 
     @property
     def name(self):
         """Return the name of the device."""
-        return self._hailin.devs[self._index].get("name", f"HaiLin {self._index}")
+        device = self._get_device()
+        return device.get("name", self._device_name) if device else self._device_name
 
     @property
     def available(self):
         """Return True if entity is available."""
-        return self._hailin.devs[self._index].get(ATTR_AVAILABLE, False)
+        device = self._resolve_device()
+        return device.get(ATTR_AVAILABLE, False) if device else False
 
     @property
     def supported_features(self):
         """Return the list of supported features."""
         supports = 0
-        if self.get_value(ATTR_HVAC_MODE) != HVACMode.FAN_ONLY:
+        hvac_mode = self.get_value(ATTR_HVAC_MODE, HVACMode.OFF)
+
+        if hvac_mode != HVACMode.FAN_ONLY:
             supports = supports | ClimateEntityFeature.TARGET_TEMPERATURE
-        if self.get_value("SUPPORT_FAN_MODE") and (
-            self.get_value(ATTR_HVAC_MODE) == HVACMode.FAN_ONLY
-            or self.get_value(ATTR_HVAC_MODE) == HVACMode.COOL
+
+        if self.get_value("SUPPORT_FAN_MODE", False) and (
+            hvac_mode == HVACMode.FAN_ONLY or hvac_mode == HVACMode.COOL
         ):
             supports = supports | ClimateEntityFeature.FAN_MODE
+
         return supports
 
     @property
@@ -145,12 +157,15 @@ class HaiLinClimate(ClimateEntity):
     @property
     def hvac_action(self):
         """Return the current running hvac operation."""
-        return self.get_value("hvac_action")
+        return self.mode_enum.get(
+            self.get_value(ATTR_HVAC_MODE, HVACMode.OFF),
+            HVACAction.OFF,
+        )
 
     @property
     def hvac_mode(self):
         """Return hvac operation ie. heat, cool mode."""
-        return self.get_value(ATTR_HVAC_MODE)
+        return self.get_value(ATTR_HVAC_MODE, HVACMode.OFF)
 
     @property
     def min_temp(self):
@@ -167,19 +182,14 @@ class HaiLinClimate(ClimateEntity):
         """Return the list of available hvac operation modes."""
         modes = [HVACMode.OFF]
 
-        # 根据设备的实际支持情况返回可用模式
-        support_fan = self.get_value("SUPPORT_FAN_MODE")
-        support_cool = self.get_value("SUPPORT_COOL_MODE")
-        support_heat = self.get_value("SUPPORT_HEAT_MODE")
-
-        if support_fan:
+        if self.get_value("SUPPORT_FAN_MODE", False):
             modes.append(HVACMode.FAN_ONLY)
-        if support_cool:
+        if self.get_value("SUPPORT_COOL_MODE", False):
             modes.append(HVACMode.COOL)
-        if support_heat:
+        if self.get_value("SUPPORT_HEAT_MODE", False):
             modes.append(HVACMode.HEAT)
 
-        return list(set(modes))  # 去重
+        return list(dict.fromkeys(modes))
 
     @property
     def fan_mode(self):
@@ -189,7 +199,7 @@ class HaiLinClimate(ClimateEntity):
     @property
     def fan_modes(self):
         """Return the list of available fan modes."""
-        if self.get_value("SUPPORT_FAN_MODE"):
+        if self.get_value("SUPPORT_FAN_MODE", False):
             return [FAN_AUTO, FAN_LOW, FAN_MEDIUM, FAN_HIGH]
         return []
 
@@ -216,14 +226,18 @@ class HaiLinClimate(ClimateEntity):
         """Set new target fan mode."""
         await self.set_value(ATTR_FAN_MODE, fan_mode)
 
-    def get_value(self, prop):
+    def get_value(self, prop, default=None):
         """Get property value from device data."""
-        return self._hailin.devs[self._index].get(prop)
+        device = self._get_device()
+        if device is None:
+            return default
+
+        return device.get(prop, default)
 
     async def set_value(self, prop, value):
         """Set property value on device."""
         _LOGGER.debug("Setting %s to %s", prop, value)
-        await self._hailin.control(self._index, prop, value)
+        await self._hailin.control(self._device_key, prop, value)
 
 
 class HaiLinData:
@@ -255,12 +269,45 @@ class HaiLinData:
         self.devs = []
         self.devices = []
 
+    def _set_cached_availability(self, available: bool) -> None:
+        """Update availability for cached devices."""
+        for device in self.devs:
+            device[ATTR_AVAILABLE] = available
+
+    @staticmethod
+    def _device_key(device: dict):
+        """Return the stable key for a device payload."""
+        return device.get("mac", device.get("id"))
+
+    def _find_device(self, device_ref):
+        """Resolve a device payload using index or stable key."""
+        if isinstance(device_ref, int):
+            if 0 <= device_ref < len(self.devs):
+                return device_ref, self.devs[device_ref]
+            return None, None
+
+        for index, device in enumerate(self.devs):
+            if self._device_key(device) == device_ref:
+                return index, device
+
+        return None, None
+
+    @staticmethod
+    def _parse_temperature(raw_value, default: float) -> float:
+        """Parse temperatures returned by HaiLin payloads."""
+        try:
+            text = str(raw_value)
+            if text.startswith("c"):
+                text = text[1:]
+            return float(text)
+        except (TypeError, ValueError):
+            return default
+
     async def async_update(self, time):
         """Update device data."""
         _LOGGER.debug("Scheduled update triggered at %s", time)
         await self.update_data()
 
-        # 通知所有实体状态已更新
         for device in self.devices:
             if hasattr(device, "async_write_ha_state"):
                 device.async_write_ha_state()
@@ -272,54 +319,66 @@ class HaiLinData:
         try:
             if not self.auth.get_token():
                 _LOGGER.info("No token available, attempting login")
-                await self.login()
+                if not await self.login():
+                    self._set_cached_availability(False)
+                    return False
             else:
                 _LOGGER.debug("Token available, skipping login")
 
             if not self.houses:
                 _LOGGER.info("No houses available, fetching house information")
-                await self.get_houses()
+                if not await self.get_houses():
+                    self._set_cached_availability(False)
+                    return False
             else:
                 _LOGGER.debug("Houses available: %d houses", len(self.houses))
 
             _LOGGER.debug("Fetching device lists from all houses")
-            await self.get_all_devices()
+            if not await self.get_all_devices():
+                self._set_cached_availability(False)
+                return False
 
             _LOGGER.info(
                 "HaiLin data update completed successfully. Found %d devices",
                 len(self.devs),
             )
+            return True
 
-        except Exception as e:
-            _LOGGER.error("Failed to update HaiLin data: %s", str(e))
-            _LOGGER.debug("Exception type: %s", type(e).__name__)
+        except Exception as err:
+            _LOGGER.error("Failed to update HaiLin data: %s", str(err))
+            _LOGGER.debug("Exception type: %s", type(err).__name__)
             import traceback
 
             _LOGGER.debug("Full traceback: %s", traceback.format_exc())
+            self._set_cached_availability(False)
+            return False
 
-    async def control(self, index, prop, value):
+    async def control(self, device_ref, prop, value):
         """Control device via server."""
         _LOGGER.info(
-            "control method called: index=%d, prop=%s, value=%s (type: %s)",
-            index,
+            "control method called: device_ref=%s, prop=%s, value=%s (type: %s)",
+            device_ref,
             prop,
             value,
             type(value),
         )
         try:
-            device = self.devs[index]
+            device_index, device = self._find_device(device_ref)
+            if device is None:
+                _LOGGER.error("Device not found for reference %s", device_ref)
+                return False
+
             device_name = device.get("name", "Unknown")
             device_mac = device.get("mac")
 
             if not device_mac:
-                _LOGGER.error("Device MAC not found for index %d", index)
+                _LOGGER.error("Device MAC not found for reference %s", device_ref)
                 return False
 
             _LOGGER.debug("Device: %s (MAC: %s)", device_name, device_mac)
 
             data = {"mac": device_mac}
 
-            # 切换模式：heat cool fan_only off
             if prop == ATTR_HVAC_MODE:
                 _LOGGER.debug(
                     "Processing HVAC mode control: value=%s, type=%s",
@@ -332,13 +391,12 @@ class HaiLinData:
                         " ", ""
                     )
                 else:
-                    # 根据不同的HVAC模式设置对应的status值
-                    hvac_mode2status = {
+                    hvac_mode_to_status = {
                         HVACMode.HEAT: 7,
                         HVACMode.COOL: 1,
                         HVACMode.FAN_ONLY: 5,
                     }
-                    status = hvac_mode2status.get(value, 1)
+                    status = hvac_mode_to_status.get(value, 1)
                     _LOGGER.info(
                         "Turning device ON with mode: %s (status: %d)", value, status
                     )
@@ -346,23 +404,20 @@ class HaiLinData:
                         {"status_onoff": "1", "status": status}
                     ).replace(" ", "")
 
-            # 切换温度
             elif prop == ATTR_TEMPERATURE:
-                # 获取当前模式，默认为heat
                 current_mode = device.get("mode", "heat")
                 data["operation"] = JSON.dumps(
                     {"heat_mode": 0, "temp_" + current_mode: "c%s" % value}
                 ).replace(" ", "")
 
-            # 切换风速
             elif prop == ATTR_FAN_MODE:
-                fan_modes2num = {
+                fan_modes_to_num = {
                     FAN_AUTO: 0,
                     FAN_LOW: 3,
                     FAN_MEDIUM: 4,
                     FAN_HIGH: 5,
                 }
-                fan_num = fan_modes2num.get(value, 0)
+                fan_num = fan_modes_to_num.get(value, 0)
                 data["operation"] = JSON.dumps({"fan_mod": str(fan_num)}).replace(
                     " ", ""
                 )
@@ -388,70 +443,172 @@ class HaiLinData:
                     prop,
                     value,
                 )
-                # 更新本地数据
-                self.devs[index][prop] = value
+
+                self.devs[device_index][prop] = value
+                self.devs[device_index][ATTR_AVAILABLE] = True
                 _LOGGER.debug("Updated local device data")
 
-                # 通知对应的实体状态已更新
-                if index < len(self.devices):
-                    device_entity = self.devices[index]
-                    if hasattr(device_entity, "async_write_ha_state"):
+                for device_entity in self.devices:
+                    if device_entity.unique_id == device_mac:
                         device_entity.async_write_ha_state()
                         _LOGGER.debug(
                             "Notified entity %s of control update", device_entity.name
                         )
+                        break
 
                 return True
-            else:
-                _LOGGER.error(
-                    "Control request failed for device %s, result: %s",
-                    device_name,
-                    result,
-                )
-                return False
 
-        except KeyError as e:
-            _LOGGER.error("Key Error happens: %s", str(e))
+            _LOGGER.error(
+                "Control request failed for device %s, result: %s",
+                device_name,
+                result,
+            )
             return False
-        except Exception as e:
-            _LOGGER.error("Failed to control device index %d: %s", index, str(e))
-            _LOGGER.debug("Exception type: %s", type(e).__name__)
+
+        except KeyError as err:
+            _LOGGER.error("Key error happens: %s", str(err))
+            return False
+        except Exception as err:
+            _LOGGER.error(
+                "Failed to control device reference %s: %s", device_ref, str(err)
+            )
+            _LOGGER.debug("Exception type: %s", type(err).__name__)
             import traceback
 
             _LOGGER.debug("Full traceback: %s", traceback.format_exc())
             return False
 
-
-
-    async def login(self):
+    async def login(self, time=None):
         """Login to HaiLin service."""
+        if time is not None:
+            _LOGGER.debug("Scheduled login triggered at %s", time)
+
         _LOGGER.info("Attempting to login to HaiLin service")
 
         token = await self.auth.login(self.type, self.username, self.password)
-
         if not token:
             _LOGGER.error("Failed to login to HaiLin for user: %s", self.username)
-        else:
-            _LOGGER.info("Successfully logged in to HaiLin for user: %s", self.username)
+            return False
+
+        _LOGGER.info("Successfully logged in to HaiLin for user: %s", self.username)
+        return True
 
     async def get_houses(self):
         """Get all houses."""
         _LOGGER.info("Fetching houses from HaiLin service")
-        self.houses = await self.auth.get_houses()
-
-        if self.houses:
-            _LOGGER.info(
-                "Successfully got %d houses from HaiLin service", len(self.houses)
-            )
-            for i, house in enumerate(self.houses):
-                _LOGGER.debug(
-                    "House %d: %s (ID: %s)",
-                    i,
-                    house.get("name", "Unknown"),
-                    house.get("house_id", "Unknown"),
-                )
-        else:
+        houses = await self.auth.get_houses()
+        if not houses:
             _LOGGER.error("Failed to get houses from HaiLin service")
+            return False
+
+        self.houses = houses
+        _LOGGER.info(
+            "Successfully got %d houses from HaiLin service", len(self.houses)
+        )
+        for index, house in enumerate(self.houses):
+            _LOGGER.debug(
+                "House %d: %s (ID: %s)",
+                index,
+                house.get("name", "Unknown"),
+                house.get("house_id", "Unknown"),
+            )
+
+        return True
+
+    def _build_device_entity(
+        self,
+        device: dict,
+        device_json_object: dict,
+        house_id,
+        house_name,
+        group_id,
+        group_name,
+        outer_device_name: str,
+    ) -> dict:
+        """Build a normalized device payload from HaiLin API data."""
+        support_fan_mode = (
+            device_json_object.get("dirty_fan_mod", False)
+            if self.support_fan is None
+            else self.support_fan
+        )
+        support_heat_mode = (
+            device_json_object.get("dirty_heat_mode", False)
+            if self.support_heat is None
+            else self.support_heat
+        )
+        support_cool_mode = (
+            device_json_object.get("dirty_temp_cool", False)
+            if self.support_cool is None
+            else self.support_cool
+        )
+
+        status_onoff = int(device_json_object.get("status_onoff", 0))
+        status = int(device_json_object.get("status", 2))
+        mode = "cool" if support_cool_mode else "heat"
+
+        status_to_hvac_mode = {
+            2: HVACMode.HEAT,
+            4: HVACMode.HEAT,
+            7: HVACMode.HEAT,
+            1: HVACMode.COOL,
+            5: HVACMode.FAN_ONLY,
+        }
+
+        hvac_mode = HVACMode.OFF
+        if status_onoff == 1:
+            hvac_mode = status_to_hvac_mode.get(status, HVACMode.OFF)
+
+        num_to_fan_mode = {
+            3: FAN_LOW,
+            4: FAN_MEDIUM,
+            5: FAN_HIGH,
+            0: FAN_AUTO,
+        }
+
+        dev_entity = dict(device)
+        dev_entity.update(
+            {
+                "SUPPORT_FAN_MODE": support_fan_mode,
+                "SUPPORT_HEAT_MODE": support_heat_mode,
+                "SUPPORT_COOL_MODE": support_cool_mode,
+                "mode": mode,
+                ATTR_HVAC_MODE: hvac_mode,
+                ATTR_CURRENT_TEMPERATURE: self._parse_temperature(
+                    device_json_object.get("dis_temp", "c20.0"), 20.0
+                ),
+                ATTR_TEMPERATURE: self._parse_temperature(
+                    device_json_object.get("temp_" + mode, "c22.0"), 22.0
+                ),
+                ATTR_AVAILABLE: device.get("is_enabled", False),
+                ATTR_MAX_TEMP: self._parse_temperature(
+                    device_json_object.get("temp_" + mode + "_default_max", "c30.0"),
+                    30.0,
+                ),
+                ATTR_MIN_TEMP: self._parse_temperature(
+                    device_json_object.get("temp_" + mode + "_default_min", "c10.0"),
+                    10.0,
+                ),
+                ATTR_NAME: outer_device_name,
+                ATTR_ID: device.get("mac"),
+                "mac": device.get("mac"),
+                "dis_dev_name": outer_device_name,
+                "house_id": house_id,
+                "house_name": house_name,
+                "group_id": group_id,
+                "group_name": group_name,
+                "device_json_object": device.get("device_json_object", "{}"),
+                "status_onoff": status_onoff,
+                "status": status,
+            }
+        )
+
+        if support_fan_mode:
+            dev_entity[ATTR_FAN_MODE] = num_to_fan_mode.get(
+                int(device_json_object.get("fan_mod", 0)),
+                FAN_AUTO,
+            )
+
+        return dev_entity
 
     async def get_all_devices(self):
         """Get device lists from all houses."""
@@ -459,9 +616,17 @@ class HaiLinData:
 
         if not self.houses:
             _LOGGER.error("No houses available, cannot fetch device lists")
-            return
+            return False
+
+        previous_devices_by_house = {}
+        for cached_device in self.devs:
+            previous_devices_by_house.setdefault(cached_device.get("house_id"), []).append(
+                dict(cached_device)
+            )
 
         all_devices = []
+        successful_house_ids = set()
+        failed_house_ids = set()
 
         for house in self.houses:
             house_id = house.get("house_id")
@@ -469,22 +634,24 @@ class HaiLinData:
 
             if not house_id:
                 _LOGGER.error("House ID not available for house: %s", house_name)
+                failed_house_ids.add(house_id)
                 continue
 
             _LOGGER.debug(
                 "Fetching devices for house: %s (ID: %s)", house_name, house_id
             )
 
-            # 构建带查询参数的URL
             url = f"{LIST_URL}?house_id={house_id}&of_all=0"
             _LOGGER.debug("Device list URL: %s", url)
 
             result = await self.auth.request(url, method="GET")
-
             if result and "data" in result:
+                successful_house_ids.add(house_id)
                 groups = result["data"]
                 _LOGGER.info(
-                    "Successfully got %d groups from house: %s", len(groups), house_name
+                    "Successfully got %d groups from house: %s",
+                    len(groups),
+                    house_name,
                 )
 
                 for group in groups:
@@ -492,169 +659,110 @@ class HaiLinData:
                     group_id = group.get("group_id")
                     _LOGGER.debug("Processing group: %s (ID: %s)", group_name, group_id)
 
-                    if "devicesGroupItems" in group:
-                        devices = group["devicesGroupItems"]
-                        _LOGGER.info(
-                            "Found %d devices in group: %s", len(devices), group_name
-                        )
+                    devices = group.get("devicesGroupItems")
+                    if not devices:
+                        _LOGGER.warning("No devices found in group: %s", group_name)
+                        continue
 
-                        # 为每个设备添加房屋和组信息
-                        for device in devices:
-                            # 保存外层的设备名称
-                            outer_device_name = device.get("dis_dev_name", "Unknown")
+                    _LOGGER.info(
+                        "Found %d devices in group: %s", len(devices), group_name
+                    )
 
-                            # 解析设备JSON对象
-                            device_json = device.get("device_json_object", "{}")
-                            try:
-                                device_json_object = JSON.loads(device_json)
-
-                                # 根据原版逻辑处理设备支持的功能
-                                support_fan_mode = (
-                                    device_json_object.get("dirty_fan_mod", False)
-                                    if (self.support_fan is None)
-                                    else self.support_fan
-                                )  # 支持送风
-                                support_heat_mode = (
-                                    device_json_object.get("dirty_heat_mode", False)
-                                    if (self.support_heat is None)
-                                    else self.support_heat
-                                )  # 支持加热
-                                support_cool_mode = (
-                                    device_json_object.get("dirty_temp_cool", False)
-                                    if (self.support_cool is None)
-                                    else self.support_cool
-                                )  # 支持制冷
-
-                                status_onoff = int(
-                                    device_json_object.get("status_onoff", 0)
-                                )  # 开机：1   关机：0
-                                status = int(device_json_object.get("status", 2))
-                                mode = "cool" if support_cool_mode else "heat"
-
-                                # HVAC模式映射
-                                # status
-                                # 2: 地暖加热中(dev_type=8)
-                                # 4: 地暖未加热(dev_type=8)
-                                # 7: 地暖(dev_type=14 || 8)
-                                # 1: 制冷(dev_type=14)
-                                # 5: 通风(dev_type=14)
-                                _status2hvac_mode = {
-                                    2: HVACMode.HEAT,
-                                    4: HVACMode.HEAT,
-                                    7: HVACMode.HEAT,
-                                    1: HVACMode.COOL,
-                                    5: HVACMode.FAN_ONLY,
-                                }
-
-                                hvac_mode = HVACMode.OFF
-                                if status_onoff == 1:
-                                    hvac_mode = _status2hvac_mode.get(
-                                        status, HVACMode.OFF
-                                    )
-
-                                # 风扇模式映射
-                                _num2fan_modes = {
-                                    3: FAN_LOW,
-                                    4: FAN_MEDIUM,
-                                    5: FAN_HIGH,
-                                    0: FAN_AUTO,
-                                }
-
-                                # 构建完整的设备实体数据
-                                dev_entity = {
-                                    "SUPPORT_FAN_MODE": support_fan_mode,
-                                    "SUPPORT_HEAT_MODE": support_heat_mode,
-                                    "SUPPORT_COOL_MODE": support_cool_mode,
-                                    "mode": mode,  # 用于组装发起请求时的字段
-                                    ATTR_HVAC_MODE: hvac_mode,  # 当前模式： 加热、制冷、吹风、关机
-                                    ATTR_CURRENT_TEMPERATURE: float(
-                                        device_json_object.get("dis_temp", "c20.0")[1:]
-                                    ),  # 当前温度
-                                    ATTR_TEMPERATURE: float(
-                                        device_json_object.get("temp_" + mode, "c22.0")[
-                                            1:
-                                        ]
-                                    ),  # 设定温度
-                                    ATTR_AVAILABLE: device.get("is_enabled"),
-                                    ATTR_MAX_TEMP: float(
-                                        device_json_object.get(
-                                            "temp_" + mode + "_default_max", "c30.0"
-                                        )[1:]
-                                    ),  # 最高温度
-                                    ATTR_MIN_TEMP: float(
-                                        device_json_object.get(
-                                            "temp_" + mode + "_default_min", "c10.0"
-                                        )[1:]
-                                    ),  # 最低温度
-                                    ATTR_NAME: outer_device_name,  # 设备名称
-                                    ATTR_ID: device.get("mac"),  # 用mac地址当做id
-                                    "mac": device.get("mac"),  # MAC地址
-                                    "dis_dev_name": outer_device_name,  # 设备显示名称
-                                    # 添加房屋和组信息
+                    for device in devices:
+                        outer_device_name = device.get("dis_dev_name", "Unknown")
+                        device_json = device.get("device_json_object", "{}")
+                        try:
+                            device_json_object = JSON.loads(device_json)
+                            dev_entity = self._build_device_entity(
+                                device,
+                                device_json_object,
+                                house_id,
+                                house_name,
+                                group_id,
+                                group_name,
+                                outer_device_name,
+                            )
+                            all_devices.append(dev_entity)
+                        except (JSON.JSONDecodeError, TypeError, ValueError) as err:
+                            _LOGGER.warning(
+                                "Failed to parse device JSON for device %s: %s",
+                                outer_device_name,
+                                str(err),
+                            )
+                            fallback_device = dict(device)
+                            fallback_device.update(
+                                {
+                                    "name": outer_device_name,
+                                    ATTR_AVAILABLE: device.get("is_enabled", False),
                                     "house_id": house_id,
                                     "house_name": house_name,
                                     "group_id": group_id,
                                     "group_name": group_name,
-                                    # 原始设备数据
-                                    "device_json_object": device_json,
-                                    "status_onoff": status_onoff,
-                                    "status": status,
                                 }
-
-                                if support_fan_mode:
-                                    dev_entity["fan_mode"] = _num2fan_modes.get(
-                                        int(device_json_object.get("fan_mod", 0)),
-                                        "auto",
-                                    )  # 风扇速度
-
-                                # 合并原始设备信息
-                                dev_entity.update(device)
-
-                                all_devices.append(dev_entity)
-
-                            except (JSON.JSONDecodeError, Exception) as e:
-                                _LOGGER.warning(
-                                    "Failed to parse device JSON for device %s: %s",
-                                    outer_device_name,
-                                    str(e),
-                                )
-                                # 如果解析失败，至少保留基本信息
-                                device["name"] = outer_device_name
-                                device["available"] = device.get("is_enabled")
-                                device["house_id"] = house_id
-                                device["house_name"] = house_name
-                                device["group_id"] = group_id
-                                device["group_name"] = group_name
-                                all_devices.append(device)
-
-                            _LOGGER.debug(
-                                "Device: %s (ID: %s, MAC: %s, Group: %s, House: %s)",
-                                device.get("name", "Unknown"),
-                                device.get("id", "Unknown"),
-                                device.get("mac", "Unknown"),
-                                group_name,
-                                house_name,
                             )
-                    else:
-                        _LOGGER.warning("No devices found in group: %s", group_name)
+                            all_devices.append(fallback_device)
+
+                        _LOGGER.debug(
+                            "Device: %s (ID: %s, MAC: %s, Group: %s, House: %s)",
+                            device.get("name", outer_device_name),
+                            device.get("id", "Unknown"),
+                            device.get("mac", "Unknown"),
+                            group_name,
+                            house_name,
+                        )
             else:
+                failed_house_ids.add(house_id)
                 _LOGGER.error("Failed to get device list from house: %s", house_name)
                 if result:
                     _LOGGER.debug("Device list response (no data): %s", result)
                 else:
                     _LOGGER.debug("No response received from device list request")
 
+        for house in self.houses:
+            house_id = house.get("house_id")
+            house_name = house.get("name", "Unknown")
+            if house_id not in failed_house_ids:
+                continue
+
+            cached_house_devices = previous_devices_by_house.get(house_id, [])
+            if not cached_house_devices:
+                continue
+
+            _LOGGER.warning(
+                "Keeping %d cached devices for house %s because refresh failed",
+                len(cached_house_devices),
+                house_name,
+            )
+            for cached_device in cached_house_devices:
+                cached_device[ATTR_AVAILABLE] = False
+                all_devices.append(cached_device)
+
+        if not successful_house_ids:
+            _LOGGER.warning(
+                "Failed to refresh any house device list, keeping %d cached devices",
+                len(self.devs),
+            )
+            return False
+
+        if not all_devices and self.devs:
+            _LOGGER.warning(
+                "Device refresh returned no devices, keeping %d cached devices",
+                len(self.devs),
+            )
+            return False
+
         self.devs = all_devices
         _LOGGER.info("Total devices found across all houses: %d", len(self.devs))
 
-        # 记录每个设备的当前状态
-        for i, dev in enumerate(self.devs):
+        for index, device in enumerate(self.devs):
             _LOGGER.debug(
                 "Device %d: %s - HVAC Mode: %s, Current Temp: %s, Target Temp: %s, Available: %s",
-                i,
-                dev.get("name", "Unknown"),
-                dev.get("hvac_mode", "Unknown"),
-                dev.get("current_temperature", "Unknown"),
-                dev.get("target_temperature", "Unknown"),
-                dev.get("available", "Unknown"),
+                index,
+                device.get("name", "Unknown"),
+                device.get(ATTR_HVAC_MODE, "Unknown"),
+                device.get(ATTR_CURRENT_TEMPERATURE, "Unknown"),
+                device.get(ATTR_TEMPERATURE, "Unknown"),
+                device.get(ATTR_AVAILABLE, "Unknown"),
             )
+
+        return True
